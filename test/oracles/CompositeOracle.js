@@ -1,77 +1,36 @@
 const { ethers } = require("hardhat")
 const { expect } = require("chai")
-const { getBigNumber, roundBN, advanceTime } = require("../utilities")
+const { getBigNumber, roundBN, advanceTime, prepare, deploy } = require("../utilities")
 
 describe("CompositeOracle", function () {
   before(async function () {
-    this.WETH9 = await ethers.getContractFactory("WETH9Mock")
-
-    this.BentoBox = await ethers.getContractFactory("BentoBox")
-
-    this.UniswapV2Pair = await ethers.getContractFactory("UniswapV2Pair")
-
-    this.SushiSwapFactory = await ethers.getContractFactory("UniswapV2Factory")
-
-    this.ReturnFalseERC20 = await ethers.getContractFactory(
-      "ReturnFalseERC20Mock"
-    )
-
-    this.SimpleSLPOracle0 = await ethers.getContractFactory(
-      "SimpleSLPTWAP0Oracle"
-    )
-
-    this.SimpleSLPOracle1 = await ethers.getContractFactory(
-      "SimpleSLPTWAP1Oracle"
-    )
-
-    this.CompositeOracle = await ethers.getContractFactory("CompositeOracle")
-
-    this.signers = await ethers.getSigners()
-
-    this.alice = this.signers[0]
+    await prepare(this, [
+      "WETH9Mock",
+      "BentoBoxPlus",
+      "UniswapV2Pair",
+      "UniswapV2Factory",
+      "ReturnFalseERC20Mock",
+      "SimpleSLPTWAP0Oracle",
+      "SimpleSLPTWAP1Oracle",
+      "CompositeOracle",
+    ])
 
     this.sushiAmount = getBigNumber(400)
-
     this.ethAmount = getBigNumber(1)
-
     this.daiAmount = getBigNumber(500)
   })
 
   beforeEach(async function () {
-    this.weth9 = await this.WETH9.deploy()
-    await this.weth9.deployed()
+    await deploy(this, [
+      ["weth9", this.WETH9Mock],
+      ["sushiToken", this.ReturnFalseERC20Mock, ["SUSHI", "SUSHI", getBigNumber("10000000")]],
+      ["ethToken", this.ReturnFalseERC20Mock, ["WETH", "ETH", getBigNumber("10000000")]],
+      ["daiToken", this.ReturnFalseERC20Mock, ["DAI", "DAI", getBigNumber("10000000")]],
+      ["factory", this.UniswapV2Factory, [this.alice.address]],
+    ])
+    await deploy(this, [["bentoBox", this.BentoBoxPlus, [this.weth9.address]]])
 
-    this.bentoBox = await this.BentoBox.deploy(this.weth9.address)
-    await this.bentoBox.deployed()
-
-    this.sushiToken = await this.ReturnFalseERC20.deploy(
-      "SUSHI",
-      "SUSHI",
-      getBigNumber("10000000")
-    )
-    await this.sushiToken.deployed()
-
-    this.ethToken = await this.ReturnFalseERC20.deploy(
-      "WETH",
-      "ETH",
-      getBigNumber("10000000")
-    )
-    await this.ethToken.deployed()
-
-    this.daiToken = await this.ReturnFalseERC20.deploy(
-      "DAI",
-      "DAI",
-      getBigNumber("10000000")
-    )
-    await this.daiToken.deployed()
-
-    this.factory = await this.SushiSwapFactory.deploy(this.alice.address)
-    await this.factory.deployed()
-
-    let createPairTx = await this.factory.createPair(
-      this.sushiToken.address,
-      this.ethToken.address
-    )
+    let createPairTx = await this.factory.createPair(this.sushiToken.address, this.ethToken.address)
 
     const pairSushiEth = (await createPairTx.wait()).events[0].args.pair
 
@@ -83,19 +42,14 @@ describe("CompositeOracle", function () {
     await this.pairSushiEth.mint(this.alice.address)
 
     if (this.ethToken.address == (await this.pairSushiEth.token0())) {
-      this.oracleSushiEth = await this.SimpleSLPOracle0.deploy()
+      this.oracleSushiEth = await this.SimpleSLPTWAP0Oracle.deploy()
     } else {
-      this.oracleSushiEth = await this.SimpleSLPOracle1.deploy()
+      this.oracleSushiEth = await this.SimpleSLPTWAP1Oracle.deploy()
     }
     await this.oracleSushiEth.deployed()
-    this.oracleDataA = await this.oracleSushiEth.getDataParameter(
-      this.pairSushiEth.address
-    )
+    this.oracleDataA = await this.oracleSushiEth.getDataParameter(this.pairSushiEth.address)
 
-    createPairTx = await this.factory.createPair(
-      this.ethToken.address,
-      this.daiToken.address
-    )
+    createPairTx = await this.factory.createPair(this.ethToken.address, this.daiToken.address)
 
     const pairDaiEth = (await createPairTx.wait()).events[0].args.pair
 
@@ -107,14 +61,12 @@ describe("CompositeOracle", function () {
     await this.pairDaiEth.mint(this.alice.address)
 
     if (this.daiToken.address == (await this.pairDaiEth.token0())) {
-      this.oracleDaiEth = await this.SimpleSLPOracle0.deploy()
+      this.oracleDaiEth = await this.SimpleSLPTWAP0Oracle.deploy()
     } else {
-      this.oracleDaiEth = await this.SimpleSLPOracle1.deploy()
+      this.oracleDaiEth = await this.SimpleSLPTWAP1Oracle.deploy()
     }
     await this.oracleDaiEth.deployed()
-    this.oracleDataB = await this.oracleDaiEth.getDataParameter(
-      this.pairDaiEth.address
-    )
+    this.oracleDataB = await this.oracleDaiEth.getDataParameter(this.pairDaiEth.address)
     this.compositeOracle = await this.CompositeOracle.deploy()
     await this.compositeOracle.deployed()
 
@@ -127,9 +79,7 @@ describe("CompositeOracle", function () {
   })
   describe("peek", function () {
     it("should return false on first peek", async function () {
-      expect(
-        (await this.compositeOracle.peek(this.compositeOracleData))[1]
-      ).to.equal("0")
+      expect((await this.compositeOracle.peek(this.compositeOracleData))[1]).to.equal("0")
     })
   })
 
@@ -139,9 +89,7 @@ describe("CompositeOracle", function () {
       await advanceTime(301, ethers)
       await this.compositeOracle.get(this.compositeOracleData)
 
-      const price = (
-        await this.compositeOracle.peek(this.compositeOracleData)
-      )[1]
+      const price = (await this.compositeOracle.peek(this.compositeOracleData))[1]
       expect(roundBN(price)).to.be.equal("80")
     })
     it("should update prices after swap", async function () {
@@ -151,9 +99,7 @@ describe("CompositeOracle", function () {
       await this.compositeOracle.get(this.compositeOracleData)
 
       //check the composite oracle
-      let price0 = (
-        await this.compositeOracle.peek(this.compositeOracleData)
-      )[1]
+      let price0 = (await this.compositeOracle.peek(this.compositeOracleData))[1]
 
       //check expectations
       const oldPrice = this.sushiAmount.mul(100).div(this.daiAmount)
@@ -161,18 +107,13 @@ describe("CompositeOracle", function () {
 
       //half the sushi price
       await advanceTime(150, ethers)
-      await this.sushiToken.transfer(
-        this.pairSushiEth.address,
-        getBigNumber(400)
-      )
+      await this.sushiToken.transfer(this.pairSushiEth.address, getBigNumber(400))
       await this.pairSushiEth.sync()
       await advanceTime(150, ethers)
 
       // read exchange rate again half way
       await this.compositeOracle.get(this.compositeOracleData)
-      let price1 = (
-        await this.compositeOracle.peek(this.compositeOracleData)
-      )[1]
+      let price1 = (await this.compositeOracle.peek(this.compositeOracleData))[1]
 
       //check expectations
       // oracle returns "the amount of callateral unit to buy 10^18 of asset units"
@@ -182,9 +123,7 @@ describe("CompositeOracle", function () {
       //read exchange rate at final price
       await advanceTime(301, ethers)
       await this.compositeOracle.get(this.compositeOracleData)
-      let price2 = (
-        await this.compositeOracle.peek(this.compositeOracleData)
-      )[1]
+      let price2 = (await this.compositeOracle.peek(this.compositeOracleData))[1]
       // oracle returns "the amount of callateral unit to buy 10^18 of asset units"
       // expectation: 1.6 of Sushi to buy 1 DAI
 
@@ -193,14 +132,10 @@ describe("CompositeOracle", function () {
   })
 
   it("Assigns name SushiSwap TWAP+SushiSwap TWAP to Composite Oracle", async function () {
-    expect(await this.compositeOracle.name(this.compositeOracleData)).to.equal(
-      "SushiSwap TWAP+SushiSwap TWAP"
-    )
+    expect(await this.compositeOracle.name(this.compositeOracleData)).to.equal("SushiSwap TWAP+SushiSwap TWAP")
   })
 
   it("Assigns symbol S+S to Composite Oracle", async function () {
-    expect(
-      await this.compositeOracle.symbol(this.compositeOracleData)
-    ).to.equal("S+S")
+    expect(await this.compositeOracle.symbol(this.compositeOracleData)).to.equal("S+S")
   })
 })
